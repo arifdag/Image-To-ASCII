@@ -3,6 +3,8 @@
 #include <vector>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <mutex>
 
 using namespace std;
 using namespace cv;
@@ -19,6 +21,9 @@ const char ASCIICharacters[] = {
 constexpr int ASCII_SIZE = sizeof(ASCIICharacters) / sizeof(ASCIICharacters[0]);
 constexpr bool QUALITY_MODE = true;
 
+// Mutex for thread-safe concatenation of ASCII art
+mutex asciiMutex;
+
 // Function to map pixel intensity to ASCII character
 char mapIntensityToAscii(int intensity) {
     return ASCIICharacters[intensity * ASCII_SIZE / 256];
@@ -32,20 +37,58 @@ Mat resizeImage(const Mat& image, int targetWidth) {
     return resizedImage;
 }
 
-// Function to convert an image to an ASCII art string
-string convertImageToASCII(const Mat& image) {
-    string asciiArt;
-    for (int y = 0; y < image.rows; y++) {
+// Function to convert a chunk of an image to ASCII art
+void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int endRow) {
+    string localAsciiArt;
+    for (int y = startRow; y < endRow; y++) {
         for (int x = 0; x < image.cols; x++) {
             int intensity = image.at<uchar>(y, x);
-            asciiArt += mapIntensityToAscii(intensity);
+            localAsciiArt += mapIntensityToAscii(intensity);
         }
-        asciiArt += '\n';
+        localAsciiArt += '\n';
+    }
+
+    // Thread-safe concatenation
+    lock_guard<mutex> lock(asciiMutex);
+    asciiArt += localAsciiArt;
+}
+
+// Function to convert an image to an ASCII art string using threads
+string convertImageToASCII(const Mat& image) {
+    int numThreads = thread::hardware_concurrency();
+    vector<thread> threads;
+    vector<string> results(numThreads); // To store ASCII art chunks
+
+    int rowsPerThread = image.rows / numThreads;
+
+    for (int i = 0; i < numThreads; ++i) {
+        int startRow = i * rowsPerThread;
+        int endRow = (i == numThreads - 1) ? image.rows : startRow + rowsPerThread;
+
+        threads.emplace_back(convertChunkToASCII, cref(image), ref(results[i]), startRow, endRow);
+    }
+
+    for (auto& t : threads) t.join();
+
+    // Combine results
+    string asciiArt;
+    for (const auto& result : results) {
+        asciiArt += result;
     }
     return asciiArt;
 }
 
-// Function to render ASCII art to an image
+// Function to render a chunk of ASCII art lines to an image
+void renderChunkToImage(const vector<string>& lines, Mat& asciiImage, int startLine, int endLine, int lineHeight, int fontSize) {
+    Scalar textColor(0); // Black text
+    for (int i = startLine; i < endLine; i++) {
+        Point textOrg(5, (i + 1) * lineHeight);
+        putText(asciiImage, lines[i], textOrg, FONT_HERSHEY_SIMPLEX,
+                fontSize / 24.0, textColor, 1, LINE_AA);
+    }
+}
+
+// Function to render ASCII art to an image using threads
 Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12) {
     vector<string> lines;
     stringstream ss(asciiArt);
@@ -67,14 +110,18 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12) {
     Mat asciiImage = Mat::zeros(imageHeight, imageWidth, CV_8UC3);
     asciiImage.setTo(Scalar(255, 255, 255)); // White background
 
-    Point textOrg;
-    Scalar textColor(0); // Black text
+    int numThreads = std::thread::hardware_concurrency();
+    vector<thread> threads;
+    int linesPerThread = lines.size() / numThreads;
 
-    for (size_t i = 0; i < lines.size(); i++) {
-        textOrg = Point(5, (i + 1) * lineHeight);
-        putText(asciiImage, lines[i], textOrg, FONT_HERSHEY_SIMPLEX,
-                fontSize / 24.0, textColor, 1, LINE_AA);
+    for (int i = 0; i < numThreads; ++i) {
+        int startLine = i * linesPerThread;
+        int endLine = (i == numThreads - 1) ? lines.size() : startLine + linesPerThread;
+
+        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight, fontSize);
     }
+
+    for (auto& t : threads) t.join();
 
     return asciiImage;
 }
@@ -91,7 +138,7 @@ void saveImage(const Mat& image, const string& outputPath) {
 }
 
 int main() {
-    const string imagePath = "Path/to/Image";
+    const string imagePath = "C:/Users/rockw/Downloads/Kodlama/resim/cagri2.jpg";
     Mat image = imread(imagePath, IMREAD_GRAYSCALE);
 
     if (image.empty()) {
