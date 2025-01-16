@@ -25,12 +25,14 @@ constexpr bool QUALITY_MODE = true;
 mutex asciiMutex;
 
 // Function to map pixel intensity to ASCII character
-char mapIntensityToAscii(int intensity) {
+char mapIntensityToAscii(int intensity)
+{
     return ASCIICharacters[intensity * ASCII_SIZE / 256];
 }
 
 // Function to resize an image for ASCII conversion
-Mat resizeImage(const Mat& image, int targetWidth) {
+Mat resizeImage(const Mat& image, int targetWidth)
+{
     int targetHeight = static_cast<int>(image.rows * (static_cast<float>(targetWidth) / image.cols));
     Mat resizedImage;
     resize(image, resizedImage, Size(targetWidth, targetHeight), 0, 0, INTER_LINEAR);
@@ -38,10 +40,13 @@ Mat resizeImage(const Mat& image, int targetWidth) {
 }
 
 // Function to convert a chunk of an image to ASCII art
-void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int endRow) {
+void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int endRow)
+{
     string localAsciiArt;
-    for (int y = startRow; y < endRow; y++) {
-        for (int x = 0; x < image.cols; x++) {
+    for (int y = startRow; y < endRow; y++)
+    {
+        for (int x = 0; x < image.cols; x++)
+        {
             int intensity = image.at<uchar>(y, x);
             localAsciiArt += mapIntensityToAscii(intensity);
         }
@@ -54,14 +59,16 @@ void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int e
 }
 
 // Function to convert an image to an ASCII art string using threads
-string convertImageToASCII(const Mat& image) {
+string convertImageToASCII(const Mat& image)
+{
     int numThreads = thread::hardware_concurrency();
     vector<thread> threads;
     vector<string> results(numThreads); // To store ASCII art chunks
 
     int rowsPerThread = image.rows / numThreads;
 
-    for (int i = 0; i < numThreads; ++i) {
+    for (int i = 0; i < numThreads; ++i)
+    {
         int startRow = i * rowsPerThread;
         int endRow = (i == numThreads - 1) ? image.rows : startRow + rowsPerThread;
 
@@ -72,16 +79,20 @@ string convertImageToASCII(const Mat& image) {
 
     // Combine results
     string asciiArt;
-    for (const auto& result : results) {
+    for (const auto& result : results)
+    {
         asciiArt += result;
     }
     return asciiArt;
 }
 
 // Function to render a chunk of ASCII art lines to an image
-void renderChunkToImage(const vector<string>& lines, Mat& asciiImage, int startLine, int endLine, int lineHeight, int fontSize) {
+void renderChunkToImage(const vector<string>& lines, Mat& asciiImage, int startLine, int endLine, int lineHeight,
+                        int fontSize)
+{
     Scalar textColor(0); // Black text
-    for (int i = startLine; i < endLine; i++) {
+    for (int i = startLine; i < endLine; i++)
+    {
         Point textOrg(5, (i + 1) * lineHeight);
         putText(asciiImage, lines[i], textOrg, FONT_HERSHEY_SIMPLEX,
                 fontSize / 24.0, textColor, 1, LINE_AA);
@@ -89,18 +100,21 @@ void renderChunkToImage(const vector<string>& lines, Mat& asciiImage, int startL
 }
 
 // Function to render ASCII art to an image using threads
-Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12) {
+Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
+{
     vector<string> lines;
     stringstream ss(asciiArt);
     string line;
 
-    while (getline(ss, line)) {
+    while (getline(ss, line))
+    {
         lines.push_back(line);
     }
 
     int lineHeight = fontSize + 2;
     int maxLineWidth = 0;
-    for (const auto& l : lines) {
+    for (const auto& l : lines)
+    {
         maxLineWidth = max(maxLineWidth, static_cast<int>(l.length()));
     }
 
@@ -114,11 +128,13 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12) {
     vector<thread> threads;
     int linesPerThread = lines.size() / numThreads;
 
-    for (int i = 0; i < numThreads; ++i) {
+    for (int i = 0; i < numThreads; ++i)
+    {
         int startLine = i * linesPerThread;
         int endLine = (i == numThreads - 1) ? lines.size() : startLine + linesPerThread;
 
-        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight, fontSize);
+        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight,
+                             fontSize);
     }
 
     for (auto& t : threads) t.join();
@@ -127,23 +143,47 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12) {
 }
 
 // Function to save an image to file
-void saveImage(const Mat& image, const string& outputPath) {
+void saveImage(const Mat& image, const string& outputPath)
+{
     vector<int> compressionParams;
-    if (QUALITY_MODE) {
+    if (QUALITY_MODE)
+    {
         compressionParams = {IMWRITE_JPEG_QUALITY, 100, IMWRITE_JPEG_OPTIMIZE, 0};
-    } else {
+    }
+    else
+    {
         compressionParams = {IMWRITE_JPEG_QUALITY, 0, IMWRITE_JPEG_OPTIMIZE, 1};
     }
     imwrite(outputPath, image, compressionParams);
 }
 
-int main() {
-    const string imagePath = "C:/Users/rockw/Downloads/Kodlama/resim/cagri2.jpg";
-    Mat image = imread(imagePath, IMREAD_GRAYSCALE);
+void extractFrames(string videoFilePath)
+{
+    VideoCapture video(videoFilePath);
+    if (!video.isOpened()) {
+        cerr << "Error: Could not load the video!" << endl;
+        return;
+    }
 
-    if (image.empty()) {
-        cerr << "Error: Could not load the image!" << endl;
-        return -1;
+    bool success = true;
+    Mat image;
+    int count = 0;
+    while (success)
+    {
+        success = video.read(image);
+        string filename = "frame " + to_string(count) + ".jpeg";
+        saveImage(image, filename);
+        count++;
+    }
+    
+}
+
+void processImage(Mat& image, string outputPath)
+{
+    if (image.empty())
+    {
+        cerr << "Error: Could not load the image!" << '\n';
+        return;
     }
 
     int targetWidth = 350;
@@ -153,9 +193,25 @@ int main() {
     int fontSize = 6;
     Mat asciiImage = renderAsciiToImage(asciiArt, fontSize);
 
-    const string outputPath = "ascii_art_output.jpeg";
     saveImage(asciiImage, outputPath);
 
     cout << "ASCII art image saved to " << outputPath << endl;
+}
+
+int main()
+{
+    const string path = "Path/To/File";
+
+    
+    extractFrames(path);
+    /*processImage(image,outputPath)
+     * Mat image = imread(path, IMREAD_GRAYSCALE);
+     ;*/
     return 0;
 }
+
+struct imageSettings
+{
+    int targetWidth;
+    int fontSize;
+};
