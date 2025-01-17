@@ -1,3 +1,5 @@
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <vector>
@@ -5,9 +7,11 @@
 #include <string>
 #include <thread>
 #include <mutex>
+#include <regex>
 
 using namespace std;
 using namespace cv;
+using namespace filesystem;
 
 // ASCII character set for intensity mapping
 const char ASCIICharacters[] = {
@@ -160,7 +164,8 @@ void saveImage(const Mat& image, const string& outputPath)
 void extractFrames(string videoFilePath)
 {
     VideoCapture video(videoFilePath);
-    if (!video.isOpened()) {
+    if (!video.isOpened())
+    {
         cerr << "Error: Could not load the video!" << endl;
         return;
     }
@@ -171,11 +176,10 @@ void extractFrames(string videoFilePath)
     while (success)
     {
         success = video.read(image);
-        string filename = "frame " + to_string(count) + ".jpeg";
+        string filename = "video frames/bad apple/frame " + to_string(count) + ".jpeg";
         saveImage(image, filename);
         count++;
     }
-    
 }
 
 void processImage(Mat& image, string outputPath)
@@ -198,12 +202,64 @@ void processImage(Mat& image, string outputPath)
     cout << "ASCII art image saved to " << outputPath << endl;
 }
 
+// Function to extract the numeric part from a filename
+int extractFrameNumber(const string& filename) {
+    regex re("frame (\\d+)\\.jpeg");
+    smatch match;
+    if (regex_search(filename, match, re)) {
+        return stoi(match[1]);
+    }
+    return -1; // Return -1 for filenames that don't match
+}
+
+void generateVideo(string fileName, int fps, int width, int height, string framePath, string outputPath) {
+    VideoWriter video(outputPath, VideoWriter::fourcc('D', 'I', 'V', 'X'), fps, Size(width, height));
+
+    if (!video.isOpened()) {
+        cerr << "Error: Could not open the video writer!" << '\n';
+        return;
+    }
+
+    // Collect all file paths
+    vector<string> filePaths;
+    for (const auto& entry : directory_iterator(framePath)) {
+        if (entry.is_regular_file()) {
+            filePaths.push_back(entry.path().string());
+        }
+    }
+
+    // Sort the file paths numerically by extracting frame numbers
+    sort(filePaths.begin(), filePaths.end(), [](const string& a, const string& b) {
+        return extractFrameNumber(a) < extractFrameNumber(b);
+    });
+
+    int count = 0;
+    for (const auto& filePath : filePaths) {
+        Mat frame = imread(filePath);
+        if (frame.empty()) {
+            cerr << "Warning: Could not read frame " << filePath << endl;
+            continue;
+        }
+
+        // Resize the frame to the target size
+        Mat resizedFrame;
+        resize(frame, resizedFrame, Size(width, height));
+
+        video.write(resizedFrame);
+        cout << "Processed frame: " << filePath << endl;
+        count++;
+    }
+
+    video.release();
+    cout << "Video generated successfully with " << count << " frames at " << outputPath << endl;
+}
+
 int main()
 {
-    const string path = "Path/To/File";
+    string framePath = "pathToFrame";
+    generateVideo("output",25,1615,2096,framePath,"output.avi");
 
     
-    extractFrames(path);
     /*processImage(image,outputPath)
      * Mat image = imread(path, IMREAD_GRAYSCALE);
      ;*/
