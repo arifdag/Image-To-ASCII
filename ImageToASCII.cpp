@@ -115,20 +115,33 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
         lines.push_back(line);
     }
 
-    int lineHeight = fontSize + 2;
-    int maxLineWidth = 0;
-    for (const auto& l : lines)
+    if (lines.empty())
     {
-        maxLineWidth = max(maxLineWidth, static_cast<int>(l.length()));
+        return Mat::zeros(100, 100, CV_8UC3); // Return a small blank image if no lines
     }
 
-    int imageWidth = static_cast<int>(maxLineWidth * (fontSize / 1.3));
+    double fontScale = fontSize / 24.0;
+    int thickness = 1;
+    int baseline;
+    int maxLineWidthPixels = 0;
+    int maxTextHeight = 0;
+
+    // Calculate maximum line width and text height
+    for (const auto& line : lines)
+    {
+        Size textSize = getTextSize(line, FONT_HERSHEY_SIMPLEX, fontScale, thickness, &baseline);
+        maxLineWidthPixels = max(maxLineWidthPixels, textSize.width);
+        maxTextHeight = max(maxTextHeight, textSize.height + baseline);
+    }
+
+    int lineHeight = maxTextHeight + 2; // Add spacing between lines
+    int imageWidth = maxLineWidthPixels + 10; // Add padding to prevent clipping
     int imageHeight = static_cast<int>(lines.size() * lineHeight);
 
     Mat asciiImage = Mat::zeros(imageHeight, imageWidth, CV_8UC3);
     asciiImage.setTo(Scalar(255, 255, 255)); // White background
 
-    int numThreads = std::thread::hardware_concurrency();
+    int numThreads = thread::hardware_concurrency();
     vector<thread> threads;
     int linesPerThread = lines.size() / numThreads;
 
@@ -137,8 +150,7 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
         int startLine = i * linesPerThread;
         int endLine = (i == numThreads - 1) ? lines.size() : startLine + linesPerThread;
 
-        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight,
-                             fontSize);
+        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight, fontSize);
     }
 
     for (auto& t : threads) t.join();
@@ -161,6 +173,40 @@ void saveImage(const Mat& image, const string& outputPath)
     imwrite(outputPath, image, compressionParams);
 }
 
+void processImage(Mat& image, string outputPath)
+{
+    if (image.empty())
+    {
+        cerr << "Error: Could not load the image!" << '\n';
+        return;
+    }
+
+    int targetWidth = 350;
+    Mat resizedImage = resizeImage(image, targetWidth);
+    Mat grayImage;
+    cvtColor(resizedImage, grayImage, COLOR_BGR2GRAY);
+    string asciiArt = convertImageToASCII(grayImage);
+
+    int fontSize = 6;
+    Mat asciiImage = renderAsciiToImage(asciiArt, fontSize);
+
+    saveImage(asciiImage, outputPath);
+
+    cout << "ASCII art image saved to " << outputPath << endl;
+}
+
+// Function to extract the numeric part from a filename
+int extractFrameNumber(const string& filename)
+{
+    regex re("frame (\\d+)\\.jpeg");
+    smatch match;
+    if (regex_search(filename, match, re))
+    {
+        return stoi(match[1]);
+    }
+    return -1; // Return -1 for filenames that don't match
+}
+
 void extractFrames(string videoFilePath)
 {
     VideoCapture video(videoFilePath);
@@ -173,70 +219,49 @@ void extractFrames(string videoFilePath)
     bool success = true;
     Mat image;
     int count = 0;
+    
     while (success)
     {
         success = video.read(image);
-        string filename = "video frames/bad apple/frame " + to_string(count) + ".jpeg";
-        saveImage(image, filename);
+        string filename = "video frames/bad apple ascii/frame " + to_string(count) + ".jpeg";
+        processImage(image, filename);
         count++;
     }
 }
 
-void processImage(Mat& image, string outputPath)
+
+void generateVideo(string fileName, int fps, int width, int height, string framePath, string outputPath)
 {
-    if (image.empty())
-    {
-        cerr << "Error: Could not load the image!" << '\n';
-        return;
-    }
-
-    int targetWidth = 350;
-    Mat resizedImage = resizeImage(image, targetWidth);
-    string asciiArt = convertImageToASCII(resizedImage);
-
-    int fontSize = 6;
-    Mat asciiImage = renderAsciiToImage(asciiArt, fontSize);
-
-    saveImage(asciiImage, outputPath);
-
-    cout << "ASCII art image saved to " << outputPath << endl;
-}
-
-// Function to extract the numeric part from a filename
-int extractFrameNumber(const string& filename) {
-    regex re("frame (\\d+)\\.jpeg");
-    smatch match;
-    if (regex_search(filename, match, re)) {
-        return stoi(match[1]);
-    }
-    return -1; // Return -1 for filenames that don't match
-}
-
-void generateVideo(string fileName, int fps, int width, int height, string framePath, string outputPath) {
     VideoWriter video(outputPath, VideoWriter::fourcc('D', 'I', 'V', 'X'), fps, Size(width, height));
 
-    if (!video.isOpened()) {
+    if (!video.isOpened())
+    {
         cerr << "Error: Could not open the video writer!" << '\n';
         return;
     }
 
     // Collect all file paths
     vector<string> filePaths;
-    for (const auto& entry : directory_iterator(framePath)) {
-        if (entry.is_regular_file()) {
+    for (const auto& entry : directory_iterator(framePath))
+    {
+        if (entry.is_regular_file())
+        {
             filePaths.push_back(entry.path().string());
         }
     }
 
     // Sort the file paths numerically by extracting frame numbers
-    sort(filePaths.begin(), filePaths.end(), [](const string& a, const string& b) {
+    sort(filePaths.begin(), filePaths.end(), [](const string& a, const string& b)
+    {
         return extractFrameNumber(a) < extractFrameNumber(b);
     });
 
     int count = 0;
-    for (const auto& filePath : filePaths) {
+    for (const auto& filePath : filePaths)
+    {
         Mat frame = imread(filePath);
-        if (frame.empty()) {
+        if (frame.empty())
+        {
             cerr << "Warning: Could not read frame " << filePath << endl;
             continue;
         }
@@ -256,9 +281,14 @@ void generateVideo(string fileName, int fps, int width, int height, string frame
 
 int main()
 {
-    string framePath = "pathToFrame";
-    generateVideo("output",25,1615,2096,framePath,"output.avi");
+    string framePath = "video/path";
+    extractFrames(framePath);
 
+    // Generate the video from the ASCII frames
+    string asciiFramesPath = "frame/path";
+    string outputVideoPath = "file_name.avi";
+    
+    generateVideo("File Name", 30, 1280, 720, asciiFramesPath, outputVideoPath);
     
     /*processImage(image,outputPath)
      * Mat image = imread(path, IMREAD_GRAYSCALE);
