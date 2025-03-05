@@ -22,16 +22,21 @@ const char ASCIICharacters[] = {
     '7', 'J', ')', 'v', 'T', 'L', 's', '?', 'z', '/', '*', 'c', 'r', '!', '+', '<',
     '>', ';', '=', '^', ',', ':', '_', '\'', '-', '.', ' '
 };
+char intensityToAscii[256]; // Global lookup table
+
 constexpr int ASCII_SIZE = sizeof(ASCIICharacters) / sizeof(ASCIICharacters[0]);
 constexpr bool QUALITY_MODE = true;
 
 // Mutex for thread-safe concatenation of ASCII art
 mutex asciiMutex;
 
-// Function to map pixel intensity to ASCII character
-char mapIntensityToAscii(int intensity)
+
+void initializeLookupTable()
 {
-    return ASCIICharacters[intensity * ASCII_SIZE / 256];
+    for (int i = 0; i < 256; ++i)
+    {
+        intensityToAscii[i] = ASCIICharacters[i * ASCII_SIZE / 256];
+    }
 }
 
 // Function to resize an image for ASCII conversion
@@ -49,10 +54,10 @@ void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int e
     string localAsciiArt;
     for (int y = startRow; y < endRow; y++)
     {
+        const uchar* row = image.ptr<uchar>(y);
         for (int x = 0; x < image.cols; x++)
         {
-            int intensity = image.at<uchar>(y, x);
-            localAsciiArt += mapIntensityToAscii(intensity);
+            localAsciiArt += intensityToAscii[row[x]];
         }
         localAsciiArt += '\n';
     }
@@ -150,7 +155,8 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
         int startLine = i * linesPerThread;
         int endLine = (i == numThreads - 1) ? lines.size() : startLine + linesPerThread;
 
-        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight, fontSize);
+        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight,
+                             fontSize);
     }
 
     for (auto& t : threads) t.join();
@@ -219,7 +225,7 @@ void extractFrames(string videoFilePath)
     bool success = true;
     Mat image;
     int count = 0;
-    
+
     while (success)
     {
         success = video.read(image);
@@ -281,15 +287,16 @@ void generateVideo(string fileName, int fps, int width, int height, string frame
 
 int main()
 {
+    initializeLookupTable();
     string framePath = "video/path";
     extractFrames(framePath);
 
     // Generate the video from the ASCII frames
     string asciiFramesPath = "frame/path";
     string outputVideoPath = "file_name.avi";
-    
+
     generateVideo("File Name", 30, 1280, 720, asciiFramesPath, outputVideoPath);
-    
+
     /*processImage(image,outputPath)
      * Mat image = imread(path, IMREAD_GRAYSCALE);
      ;*/
