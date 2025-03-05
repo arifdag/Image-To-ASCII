@@ -24,12 +24,12 @@ const char ASCIICharacters[] = {
 };
 char intensityToAscii[256]; // Global lookup table
 
+map<char, Mat> preRenderedChars;
+int charWidth = 0;
+int charHeight = 0;
+
 constexpr int ASCII_SIZE = sizeof(ASCIICharacters) / sizeof(ASCIICharacters[0]);
 constexpr bool QUALITY_MODE = true;
-
-// Mutex for thread-safe concatenation of ASCII art
-mutex asciiMutex;
-
 
 void initializeLookupTable()
 {
@@ -51,20 +51,15 @@ Mat resizeImage(const Mat& image, int targetWidth)
 // Function to convert a chunk of an image to ASCII art
 void convertChunkToASCII(const Mat& image, string& asciiArt, int startRow, int endRow)
 {
-    string localAsciiArt;
     for (int y = startRow; y < endRow; y++)
     {
         const uchar* row = image.ptr<uchar>(y);
         for (int x = 0; x < image.cols; x++)
         {
-            localAsciiArt += intensityToAscii[row[x]];
+            asciiArt += intensityToAscii[row[x]];
         }
-        localAsciiArt += '\n';
+        asciiArt += '\n';
     }
-
-    // Thread-safe concatenation
-    lock_guard<mutex> lock(asciiMutex);
-    asciiArt += localAsciiArt;
 }
 
 // Function to convert an image to an ASCII art string using threads
@@ -95,22 +90,82 @@ string convertImageToASCII(const Mat& image)
     return asciiArt;
 }
 
-// Function to render a chunk of ASCII art lines to an image
-void renderChunkToImage(const vector<string>& lines, Mat& asciiImage, int startLine, int endLine, int lineHeight,
-                        int fontSize)
+void preRenderCharacters(int fontSize)
 {
-    Scalar textColor(0); // Black text
+    preRenderedChars.clear();
+    int baseline;
+    Scalar textColor(0);
+    double fontScale = fontSize / 24.0;
+
+    // First pass: calculate max character dimensions
+    for (char c : ASCIICharacters)
+    {
+        string s(1, c);
+        Size textSize = getTextSize(s, FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseline);
+        charWidth = max(charWidth, textSize.width);
+        charHeight = max(charHeight, textSize.height + baseline);
+    }
+
+    // Second pass: render characters centered in fixed-size cells
+    for (char c : ASCIICharacters)
+    {
+        Mat charImg(charHeight, charWidth, CV_8UC3, Scalar(255, 255, 255));
+        string s(1, c);
+        Size textSize = getTextSize(s, FONT_HERSHEY_SIMPLEX, fontScale, 1, &baseline);
+
+        // Center character in cell
+        Point org(
+            (charWidth - textSize.width) / 2,
+            (charHeight + textSize.height - baseline) / 2
+        );
+
+        putText(charImg, s, org, FONT_HERSHEY_SIMPLEX, fontScale, textColor, 1, LINE_AA);
+        preRenderedChars[c] = charImg;
+    }
+}
+
+// Function to render a chunk of ASCII art lines to an image in a dedicated sub-region
+void renderChunkToImage(const vector<string>& lines, Mat& asciiImage,
+                        int startLine, int endLine, int lineSpacing)
+{
     for (int i = startLine; i < endLine; i++)
     {
-        Point textOrg(5, (i + 1) * lineHeight);
-        putText(asciiImage, lines[i], textOrg, FONT_HERSHEY_SIMPLEX,
-                fontSize / 24.0, textColor, 1, LINE_AA);
+        int yPos = i * (charHeight + lineSpacing);
+        for (int x = 0; x < lines[i].size(); x++)
+        {
+            char c = lines[i][x];
+            Mat& charImg = preRenderedChars[c];
+
+            // Calculate position for this character
+            Rect destROI(
+                x * charWidth, // X position
+                yPos, // Y position
+                charWidth, // Cell width
+                charHeight // Cell height
+            );
+
+            // Ensure ROI stays within image bounds
+            if (destROI.x + destROI.width > asciiImage.cols ||
+                destROI.y + destROI.height > asciiImage.rows)
+            {
+                continue;
+            }
+
+            charImg.copyTo(asciiImage(destROI));
+        }
     }
 }
 
 // Function to render ASCII art to an image using threads
 Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
 {
+    static bool initialized = false;
+    if (!initialized)
+    {
+        preRenderCharacters(fontSize);
+        initialized = true;
+    }
+
     vector<string> lines;
     stringstream ss(asciiArt);
     string line;
@@ -125,38 +180,31 @@ Mat renderAsciiToImage(const string& asciiArt, int fontSize = 12)
         return Mat::zeros(100, 100, CV_8UC3); // Return a small blank image if no lines
     }
 
-    double fontScale = fontSize / 24.0;
-    int thickness = 1;
-    int baseline;
-    int maxLineWidthPixels = 0;
-    int maxTextHeight = 0;
-
-    // Calculate maximum line width and text height
-    for (const auto& line : lines)
+    // Calculate image dimensions
+    int maxLineLength = 0;
+    for (const auto& l : lines)
     {
-        Size textSize = getTextSize(line, FONT_HERSHEY_SIMPLEX, fontScale, thickness, &baseline);
-        maxLineWidthPixels = max(maxLineWidthPixels, textSize.width);
-        maxTextHeight = max(maxTextHeight, textSize.height + baseline);
+        maxLineLength = max(maxLineLength, (int)l.size());
     }
 
-    int lineHeight = maxTextHeight + 2; // Add spacing between lines
-    int imageWidth = maxLineWidthPixels + 10; // Add padding to prevent clipping
-    int imageHeight = static_cast<int>(lines.size() * lineHeight);
+    Mat asciiImage(
+        lines.size() * charHeight, // Height
+        maxLineLength * charWidth, // Width
+        CV_8UC3, // Type
+        Scalar(255, 255, 255) // White background
+    );
 
-    Mat asciiImage = Mat::zeros(imageHeight, imageWidth, CV_8UC3);
-    asciiImage.setTo(Scalar(255, 255, 255)); // White background
-
-    int numThreads = thread::hardware_concurrency();
+    // Render with threads
+    const int numThreads = thread::hardware_concurrency();
     vector<thread> threads;
-    int linesPerThread = lines.size() / numThreads;
+    const int linesPerThread = lines.size() / numThreads;
 
-    for (int i = 0; i < numThreads; ++i)
+    for (int i = 0; i < numThreads; i++)
     {
         int startLine = i * linesPerThread;
         int endLine = (i == numThreads - 1) ? lines.size() : startLine + linesPerThread;
 
-        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, lineHeight,
-                             fontSize);
+        threads.emplace_back(renderChunkToImage, cref(lines), ref(asciiImage), startLine, endLine, 2);
     }
 
     for (auto& t : threads) t.join();
@@ -195,7 +243,6 @@ void processImage(Mat& image, string outputPath)
 
     int fontSize = 6;
     Mat asciiImage = renderAsciiToImage(asciiArt, fontSize);
-
     saveImage(asciiImage, outputPath);
 
     cout << "ASCII art image saved to " << outputPath << endl;
@@ -234,7 +281,6 @@ void extractFrames(string videoFilePath)
         count++;
     }
 }
-
 
 void generateVideo(string fileName, int fps, int width, int height, string framePath, string outputPath)
 {
@@ -297,9 +343,6 @@ int main()
 
     generateVideo("File Name", 30, 1280, 720, asciiFramesPath, outputVideoPath);
 
-    /*processImage(image,outputPath)
-     * Mat image = imread(path, IMREAD_GRAYSCALE);
-     ;*/
     return 0;
 }
 
